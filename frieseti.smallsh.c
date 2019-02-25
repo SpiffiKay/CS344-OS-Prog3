@@ -19,40 +19,42 @@
 #define MAX_CHARS 2048   
 
 //global vars
-char args[MAX_CHARS];	//command line args
+char input[MAX_CHARS];	//command line args
+char *args[MAX_ARGS];
 
 //prototypes
-void CommandLine();
+int CommandLine();
 
 int main(){
-  int runShell = 1;
+  int runShell = 1,
+      argc = 0;
   
   //while shell is running
   do{
     //run command line
-    CommandLine();
+    argc = CommandLine();
   
     //built-in entered: exit
-    if(strncmp(args, "exit", 4) == 0)
+    if(strncmp(args[0], "exit", 4) == 0)
     {
       printf("exiting\n");
       fflush(stdout);
       runShell = 0;
     }
     //built-in entered: status
-    else if(strncmp(args, "status", 6) == 0)
+    else if(strncmp(args[0], "status", 6) == 0)
     {
-      printf("\"status\"entered\n");
+      printf("\"status\" entered\n");
       fflush(stdout);
     }
     //built in entered: cd
-    else if(strncmp(args, "cd", 2) == 0)
+    else if(strncmp(args[0], "cd", 2) == 0)
     {
       printf("\"cd\" entered\n");
       fflush(stdout);
     }
     //comments entered
-    else if(strncmp(args, "#", 1) == 0)
+    else if(strncmp(args[0], "#", 1) == 0)
     {
       printf("comments entered");
       fflush(stdout);
@@ -76,15 +78,29 @@ int main(){
  *Description: Prints : as the command line, then takes in user input as
  *as array.
  *************************************************************************/
-void CommandLine(){
-  char *cptr;
+CommandLine(){
+  char *token = NULL;
   char cline[] = ": ";  
-  memset(args, '\0', MAX_CHARS);  //instantiate buffer to null
-
-  //print: and take and parse command line args
+  int i = 0;
+  memset(input, '\0', MAX_CHARS);  //instantiate buffer to null
+  memset(args, '\0', MAX_ARGS);  //instantiate pointers to args to null
+ 
+ //print and take command line args
   write(1, cline, 2);
   fflush(stdout);
   fflush(stdin);
+  fgets(input, MAX_CHARS, stdin);
 
-  fgets(args, MAX_CHARS, stdin);	
+  //tokenize input, save args to array
+  token = strtok(input, " ");
+  while(token != NULL)
+  {
+    printf("%s\n", token);
+    args[i] = token;
+    printf("args[%d]: %s\n", i, args[i]);
+    token = strtok(NULL, " ");
+    i++;
+  }
+  
+  return i;
 }
