@@ -23,13 +23,13 @@ void CommandLine(char*, char**);
 void ChangeDir(char**);
 int KillProcesses(pid_t[], int);
 void fgExitStatus(int);
-
+void SubPID(char*);
 
 
 int main(){
     int runShell = 1,
         pCount = 0,
-        status = -7;
+        status = -7;   //-7 indicates no foreground proc have run yet
     char *input = malloc(MAX_CHARS * sizeof(char));
     char **args = malloc(MAX_ARGS * sizeof(char));
     memset(input, '\0', MAX_CHARS);
@@ -44,37 +44,39 @@ int main(){
       //run command line
       CommandLine(input, args);
   
+      //blank space
+      if(strcmp(args[0], "\0") == 0) 
+        continue;
+      //comments entered
+      else if(strncmp(args[0], "#", 1) == 0)
+        continue;    
       //built-in entered: exit
-      if(strcmp(args[0], "exit") == 0)
+      else if(strcmp(args[0], "exit") == 0)
         runShell = KillProcesses(proc, pCount);
       //built-in entered: status
       else if(strcmp(args[0], "status") == 0)
       { 
          //if no foreground processes have run yet
-         if(status == -7)
-           write(1, "exit status 0\n", 14);
-         else
-           fgExitStatus(status);
+        if(status == -7)
+        {
+          write(1, "exit status 0\n", 14);
+          fflush(stdout);
+        }
+        else
+          fgExitStatus(status);
       }
       //built in entered: cd
       else if(strcmp(args[0], "cd") == 0)
         ChangeDir(args);
-      //comments entered
-      else if(strncmp(args[0], "#", 1) == 0)
-       continue;
       //all other commands
       else
       {
         printf("all other input\n");
-        continue;
 
       }
    
-   
-  
     }while(runShell == 1);
   
-
     //free alloc mem
     free(input);
     free(args);
@@ -95,10 +97,10 @@ void CommandLine(char *inputStr, char **args){
     char *token = NULL;
     char cLine[] = ": ";
     char *input = NULL;  
-    int i = 0,
+    int i = 0,	
         numChars = -1;
     size_t bufSize = 0;
-    memset(args, '\0', MAX_ARGS);  //instantiate pointers to args to null
+    memset(args, '\0', MAX_ARGS);  
     memset(inputStr, '\0', MAX_CHARS);
  
    //print and take command line args
@@ -113,22 +115,21 @@ void CommandLine(char *inputStr, char **args){
     else
       sprintf(inputStr, input);
 
-    //tokenize input, save args to array
+    //tokenize input
     token = strtok(inputStr, " ");
-    
+    //continue to tokenize input, save args to array, check for specific input
     do
     {
       //remove trailing \n from getline
       token[strcspn(token, "\n")] = '\0';
       args[i] = token;
-       
-      //run in background
-      if(strcmp(args[i], "&") == 0)
-      {
-        printf("backround process\n");
-      }
+      
+      //replace $$ with PID if at end of string or alone
+      if(strstr(args[i], "$$") != 0)
+        SubPID(args[i]); 
+     
       //redirect input
-      else if(strncmp(args[i], "<", 1) == 0)
+      if(strncmp(args[i], "<", 1) == 0)
       {
         printf("input redirection\n");
       }
@@ -137,16 +138,23 @@ void CommandLine(char *inputStr, char **args){
       {
         printf("output redirection\n");
       }
-      else if(strcmp(args[i], "$$") == 0)
-      {
-        printf("$$ to pid\n");
-      }
+ 
 
       printf("args[%d]: %s\n", i, args[i]);
       token = strtok(NULL, " ");
       fflush(stdout);
       i++;
     }while(token != NULL);
+     
+    //do/while increments i one past last arg in loop to add last token
+    //to array. decrement i.
+    i--;     
+
+    //run in background
+    if(strcmp(args[i], "&") == 0)
+    {
+      printf("backround process\n");
+    }
 
     //free alloc mem
     free(input);
@@ -180,6 +188,24 @@ void ChangeDir(char **args){
     }
 }
 
+/**************************************************************************
+ *Function: SubPID()
+ *Description: 
+ *************************************************************************/
+void SubPID(char *addPID){
+   int pid = 0,
+       i = 0;
+   int len = 0;
+   
+   len = strlen(addPID);
+   pid = getpid();
+
+   addPID[strcspn(addPID, "$")+1] = '\0';
+   printf("subtract 1 $: %s\n", addPID);
+   addPID[strcspn(addPID, "$")] = '\0';
+   printf("subtract 2 $: %s\n", addPID);
+   }
+}
 
 
 
