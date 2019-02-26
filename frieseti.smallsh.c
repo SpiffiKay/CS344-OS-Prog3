@@ -16,18 +16,12 @@
 
 //max amounts for command line
 #define MAX_ARGS 512 	  
-#define MAX_CHARS 2048   
-
-//global vars
-char input[MAX_CHARS];	//command line args
-char *args[MAX_ARGS];
-pid_t proc[128];
-
+#define MAX_CHARS 2048 
 
 //prototypes
-void CommandLine();
-void ChangeDir();
-int KillProcesses(int);
+void CommandLine(char*, char**);
+void ChangeDir(char**);
+int KillProcesses(pid_t[], int);
 void fgExitStatus(int);
 
 
@@ -36,20 +30,25 @@ int main(){
     int runShell = 1,
         pCount = 0,
         status = -7;
-   
+    char *input = malloc(MAX_CHARS * sizeof(char));
+    char **args = malloc(MAX_ARGS * sizeof(char));
+    memset(input, '\0', MAX_CHARS);
+    memset(args, '\0', MAX_ARGS);
+    pid_t proc[128];
+
 
 
 
     //while shell is running
     do{
       //run command line
-      CommandLine();
+      CommandLine(input, args);
   
       //built-in entered: exit
-      if(strncmp(args[0], "exit", 4) == 0)
-        runShell = KillProcesses(pCount);
+      if(strcmp(args[0], "exit") == 0)
+        runShell = KillProcesses(proc, pCount);
       //built-in entered: status
-      else if(strncmp(args[0], "status", 6) == 0)
+      else if(strcmp(args[0], "status") == 0)
       { 
          //if no foreground processes have run yet
          if(status == -7)
@@ -58,23 +57,27 @@ int main(){
            fgExitStatus(status);
       }
       //built in entered: cd
-      else if(strncmp(args[0], "cd", 2) == 0)
-        ChangeDir();
+      else if(strcmp(args[0], "cd") == 0)
+        ChangeDir(args);
       //comments entered
       else if(strncmp(args[0], "#", 1) == 0)
-       runShell = 1;
+       continue;
       //all other commands
       else
-       runShell = 1;
+      {
+        printf("all other input\n");
+        continue;
 
-    
+      }
    
    
   
     }while(runShell == 1);
   
 
-    
+    //free alloc mem
+    free(input);
+    free(args);
   
     return 0;
 }
@@ -88,27 +91,65 @@ int main(){
  *Function: CommandLine()
  *Description: Prints ": " as the command line, then 
  *************************************************************************/
-void CommandLine(){
+void CommandLine(char *inputStr, char **args){
     char *token = NULL;
-    char cline[] = ": ";  
-    int i = 0;
-    memset(input, '\0', MAX_CHARS);  //instantiate buffer to null
+    char cLine[] = ": ";
+    char *input = NULL;  
+    int i = 0,
+        numChars = -1;
+    size_t bufSize = 0;
     memset(args, '\0', MAX_ARGS);  //instantiate pointers to args to null
+    memset(inputStr, '\0', MAX_CHARS);
  
    //print and take command line args
-    write(1, cline, 2);
+    write(1, cLine, 2);
     fflush(stdout);
     fflush(stdin);
-    fgets(input, MAX_CHARS, stdin);
+    numChars = getline(&input, &bufSize, stdin);
+     //if getline error
+    if(numChars == -1)
+      clearerr(stdin);
+    //copy string from getline to permanent array
+    else
+      sprintf(inputStr, input);
 
     //tokenize input, save args to array
-    token = strtok(input, " ");
-    while(token != NULL)
+    token = strtok(inputStr, " ");
+    
+    do
     {
+      //remove trailing \n from getline
+      token[strcspn(token, "\n")] = '\0';
       args[i] = token;
+       
+      //run in background
+      if(strcmp(args[i], "&") == 0)
+      {
+        printf("backround process\n");
+      }
+      //redirect input
+      else if(strncmp(args[i], "<", 1) == 0)
+      {
+        printf("input redirection\n");
+      }
+      //redirect output
+      else if(strncmp(args[i], ">", 1) == 0)
+      {
+        printf("output redirection\n");
+      }
+      else if(strcmp(args[i], "$$") == 0)
+      {
+        printf("$$ to pid\n");
+      }
+
+      printf("args[%d]: %s\n", i, args[i]);
       token = strtok(NULL, " ");
+      fflush(stdout);
       i++;
-    }
+    }while(token != NULL);
+
+    //free alloc mem
+    free(input);
 }
 
 /**************************************************************************
@@ -117,29 +158,28 @@ void CommandLine(){
  *home. If a directory path is given, change directory to that directory, *
  *if it is valid. If it is invalid, write an error message to stderr.     *
  *************************************************************************/
-void ChangeDir(){
+void ChangeDir(char **args){
     char *home = NULL; 
 
     //cd with no args
     if(args[1] == NULL)
     {
-      printf("in cd no args\n");
+      printf("cd no args\n");
       fflush(stdout);
       home = getenv("HOME");
       chdir(home);
     }
     //cd with arg
     else
-    {
-      printf("in cd with arg\n");
-      fflush(stdout);
-      //if unsuccessful
-    if(chdir(args[1]) != 0)
-    { 
-      fprintf(stderr, "%s: no such file or directory\n", args[1]);
+    {  
+
+
+      //if dir doesn't exist
+      if(chdir(args[1]) != 0)  
+        fprintf(stderr, "%s: no such file or directory\n", args[1]);
     }
-  }
 }
+
 
 
 
@@ -151,7 +191,7 @@ void ChangeDir(){
  *currently running background programs. It then returns zero to end the  *
  *program.                                                                *
  *************************************************************************/
-int KillProcesses(int pCount){
+int KillProcesses(pid_t proc[], int pCount){
     int i = 0;
 
     //kills all running background processes
@@ -160,6 +200,7 @@ int KillProcesses(int pCount){
       kill(proc[pCount], SIGTERM);
     }  
 
+    printf("kill program\n");
     return 0;
 }
 
