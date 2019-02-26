@@ -19,30 +19,31 @@
 #define MAX_CHARS 2048 
 
 //prototypes
-void CommandLine(char*, char**);
+void CommandLine(char*, char**, char*, int);
 void ChangeDir(char**);
 int KillProcesses(pid_t[], int);
 void fgExitStatus(int);
-void SubPID(char*);
-
+char *SubPID(char*, int);
 
 int main(){
     int runShell = 1,
         pCount = 0,
-        status = -7;   //-7 indicates no foreground proc have run yet
+        status = -7,   //-7 indicates no foreground proc have run yet
+        shPID = getpid();  //shell pid for $$ expansion
     char *input = malloc(MAX_CHARS * sizeof(char));
     char **args = malloc(MAX_ARGS * sizeof(char));
+    char *expanded = malloc(50 * sizeof(char));  //expanded var mem
     memset(input, '\0', MAX_CHARS);
     memset(args, '\0', MAX_ARGS);
     pid_t proc[128];
-
+   
 
 
 
     //while shell is running
     do{
       //run command line
-      CommandLine(input, args);
+      CommandLine(input, args, expanded, shPID);
   
       //blank space
       if(strcmp(args[0], "\0") == 0) 
@@ -80,7 +81,8 @@ int main(){
     //free alloc mem
     free(input);
     free(args);
-  
+    free(expanded);  
+
     return 0;
 }
 
@@ -93,7 +95,7 @@ int main(){
  *Function: CommandLine()
  *Description: Prints ": " as the command line, then 
  *************************************************************************/
-void CommandLine(char *inputStr, char **args){
+void CommandLine(char *inputStr, char **args, char *expanded, int shPID){
     char *token = NULL;
     char cLine[] = ": ";
     char *input = NULL;  
@@ -102,6 +104,7 @@ void CommandLine(char *inputStr, char **args){
     size_t bufSize = 0;
     memset(args, '\0', MAX_ARGS);  
     memset(inputStr, '\0', MAX_CHARS);
+    memset(expanded, '\0', 50);
  
    //print and take command line args
     write(1, cLine, 2);
@@ -122,12 +125,16 @@ void CommandLine(char *inputStr, char **args){
     {
       //remove trailing \n from getline
       token[strcspn(token, "\n")] = '\0';
-      args[i] = token;
       
-      //replace $$ with PID if at end of string or alone
-      if(strstr(args[i], "$$") != 0)
-        SubPID(args[i]); 
-     
+      //expand var with $$ with pid
+      if(strstr(token, "$$") != 0)
+      {  
+        sprintf(expanded, token);
+        args[i] = SubPID(expanded, shPID); 
+      }
+      else
+       args[i] = token;
+    
       //redirect input
       if(strncmp(args[i], "<", 1) == 0)
       {
@@ -192,19 +199,20 @@ void ChangeDir(char **args){
  *Function: SubPID()
  *Description: 
  *************************************************************************/
-void SubPID(char *addPID){
-   int pid = 0,
-       i = 0;
-   int len = 0;
-   
-   len = strlen(addPID);
-   pid = getpid();
+char* SubPID(char *addPID, int pid){
+   char withPID[7];
+   memset(withPID, '\0', 7);
 
+ 
+   //cut off the $$ at end or if alone as reqd.
    addPID[strcspn(addPID, "$")+1] = '\0';
-   printf("subtract 1 $: %s\n", addPID);
    addPID[strcspn(addPID, "$")] = '\0';
-   printf("subtract 2 $: %s\n", addPID);
-   }
+
+   //replace with subshell pid
+   sprintf(withPID, "%d", pid);
+   strcat(addPID, withPID);
+
+   return addPID;   
 }
 
 
