@@ -18,12 +18,23 @@
 #define MAX_ARGS 512 	  
 #define MAX_CHARS 2048 
 
+//struct for flags and handling input/output redirect
+struct flags{
+    char *input;    //input filename
+    char *output;   //output filename
+    int redirIn;    //flag input redirect
+    int redirOut;   //flag output redirect
+    int bckgrnd; //flag if command to run in background
+};
+
+
 //prototypes
-void CommandLine(char*, char**, char*, int);
+int CommandLine(char*, char**, char*, struct flags, int);
 void ChangeDir(char**);
 int KillProcesses(pid_t[], int);
 void fgExitStatus(int);
 char *SubPID(char*, int);
+//void execCommand();
 
 int main(){
     int runShell = 1,
@@ -36,14 +47,25 @@ int main(){
     memset(input, '\0', MAX_CHARS);
     memset(args, '\0', MAX_ARGS);
     pid_t proc[128];
-   
+    //instantiate flag struct
+    struct flags flag;
+    flag.input = calloc(50, sizeof(char));
+    flag.output = calloc(50, sizeof(char));
+    
 
 
 
     //while shell is running
     do{
+      //reset flags struct
+      memset(flag.input, '\0', 50);
+      memset(flag.output, '\0', 50);
+      flag.redirIn = 0;
+      flag.redirOut = 0;
+      int bckgrnd = 0;
+
       //run command line
-      CommandLine(input, args, expanded, shPID);
+      CommandLine(input, args, expanded, flag, shPID);
   
       //blank space
       if(strcmp(args[0], "\0") == 0) 
@@ -82,7 +104,9 @@ int main(){
     free(input);
     free(args);
     free(expanded);  
-
+    free(flag.input);
+    free(flag.output);
+   
     return 0;
 }
 
@@ -95,10 +119,11 @@ int main(){
  *Function: CommandLine()
  *Description: Prints ": " as the command line, then 
  *************************************************************************/
-void CommandLine(char *inputStr, char **args, char *expanded, int shPID){
+int CommandLine(char *inputStr, char **args, char *expanded, struct flags flag, int shPID){
     char *token = NULL;
     char cLine[] = ": ";
     char *input = NULL;  
+    char redSym = NULL;
     int i = 0,	
         numChars = -1;
     size_t bufSize = 0;
@@ -106,7 +131,7 @@ void CommandLine(char *inputStr, char **args, char *expanded, int shPID){
     memset(inputStr, '\0', MAX_CHARS);
     memset(expanded, '\0', 50);
  
-   //print and take command line args
+    //print and take command line args
     write(1, cLine, 2);
     fflush(stdout);
     fflush(stdin);
@@ -133,20 +158,27 @@ void CommandLine(char *inputStr, char **args, char *expanded, int shPID){
         args[i] = SubPID(expanded, shPID); 
       }
       else
-       args[i] = token;
+        args[i] = token;
     
       //redirect input
-      if(strncmp(args[i], "<", 1) == 0)
+      if(strcmp(args[i], "<") == 0)
       {
-        printf("input redirection\n");
+        token = strtok(NULL, " ");
+        token[strcspn(token, "\n")] = '\0';
+        i++;
+        args[i] = token;
+        strcpy(flag.input, args[i]);
+        printf("flag.input: %s\n", flag.input);
+        flag.redirIn = 1;	//set redir flag
       }
       //redirect output
       else if(strncmp(args[i], ">", 1) == 0)
       {
-        printf("output redirection\n");
+
+        printf("output redirect from: %s\n", flag.output);
+        flag.redirOut = 1;  
       }
  
-
       printf("args[%d]: %s\n", i, args[i]);
       token = strtok(NULL, " ");
       fflush(stdout);
@@ -160,6 +192,7 @@ void CommandLine(char *inputStr, char **args, char *expanded, int shPID){
     //run in background
     if(strcmp(args[i], "&") == 0)
     {
+      flag.bckgrnd = 1;
       printf("backround process\n");
     }
 
@@ -175,6 +208,8 @@ void CommandLine(char *inputStr, char **args, char *expanded, int shPID){
  *************************************************************************/
 void ChangeDir(char **args){
     char *home = NULL; 
+    char cwd[30];
+    memset(cwd, '\0', 30);
 
     //cd with no args
     if(args[1] == NULL)
@@ -187,11 +222,9 @@ void ChangeDir(char **args){
     //cd with arg
     else
     {  
-
-
-      //if dir doesn't exist
+      //change dir, print to stderr if dir doesn't exist
       if(chdir(args[1]) != 0)  
-        fprintf(stderr, "%s: no such file or directory\n", args[1]);
+        fprintf(stderr, "%s: no such file or directory\n", args[1]); 
     }
 }
 
@@ -203,7 +236,6 @@ char* SubPID(char *addPID, int pid){
    char withPID[7];
    memset(withPID, '\0', 7);
 
- 
    //cut off the $$ at end or if alone as reqd.
    addPID[strcspn(addPID, "$")+1] = '\0';
    addPID[strcspn(addPID, "$")] = '\0';
