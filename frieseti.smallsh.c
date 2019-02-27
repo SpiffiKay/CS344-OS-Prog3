@@ -24,17 +24,20 @@ struct flags{
     char *output;   //output filename
     int redirIn;    //flag input redirect
     int redirOut;   //flag output redirect
-    int bckgrnd; //flag if command to run in background
+    pid_t *bgPIDs;  //track background PIDs
+    int numPIDs;    //number of background pids
+    int bckgrnd;    //flag if command to run in background
+    int allowBckgrnd; //flag if background processes are allowed
 };
 
 
 //prototypes
-int CommandLine(char*, char**, char*, struct flags, int);
+int CommandLine(char*, char**, char*, struct flags*, int);
 void ChangeDir(char**);
 int KillProcesses(pid_t[], int);
 void fgExitStatus(int);
 char *SubPID(char*, int);
-//void execCommand();
+void execCommand(char**, struct flags*);
 
 int main(){
     int runShell = 1,
@@ -48,21 +51,23 @@ int main(){
     memset(args, '\0', MAX_ARGS);
     pid_t proc[128];
     //instantiate flag struct
-    struct flags flag;
-    flag.input = calloc(50, sizeof(char));
-    flag.output = calloc(50, sizeof(char));
-    
-
+    struct flags *flag = malloc(sizeof(struct flags));
+    flag->input = calloc(50, sizeof(char));
+    flag->output = calloc(50, sizeof(char));
+    flag->bgPIDs = calloc(128, sizeof(pid_t));
+    flag->allowBckgrnd = 1;    
+    flag->numPIDs = 0;
 
 
     //while shell is running
     do{
       //reset flags struct
-      memset(flag.input, '\0', 50);
-      memset(flag.output, '\0', 50);
-      flag.redirIn = 0;
-      flag.redirOut = 0;
-      int bckgrnd = 0;
+      memset(flag->input, '\0', 50);
+      memset(flag->output, '\0', 50);
+      flag->redirIn = 0;
+      flag->redirOut = 0;
+      flag->bckgrnd = 0;
+
 
       //run command line
       CommandLine(input, args, expanded, flag, shPID);
@@ -94,6 +99,7 @@ int main(){
       //all other commands
       else
       {
+        execCommand(args, flag);
         printf("all other input\n");
 
       }
@@ -104,9 +110,11 @@ int main(){
     free(input);
     free(args);
     free(expanded);  
-    free(flag.input);
-    free(flag.output);
-   
+    free(flag->input);
+    free(flag->output);
+    free(flag->bgPIDs);
+    free(flag);
+
     return 0;
 }
 
@@ -119,7 +127,7 @@ int main(){
  *Function: CommandLine()
  *Description: Prints ": " as the command line, then 
  *************************************************************************/
-int CommandLine(char *inputStr, char **args, char *expanded, struct flags flag, int shPID){
+int CommandLine(char *inputStr, char **args, char *expanded, struct flags *flag, int shPID){
     char *token = NULL;
     char cLine[] = ": ";
     char *input = NULL;  
@@ -163,25 +171,32 @@ int CommandLine(char *inputStr, char **args, char *expanded, struct flags flag, 
       //redirect input
       if(strcmp(args[i], "<") == 0)
       {
+        //get next arg, save as input file
         token = strtok(NULL, " ");
         token[strcspn(token, "\n")] = '\0';
-        i++;
-        args[i] = token;
-        strcpy(flag.input, args[i]);
-        printf("flag.input: %s\n", flag.input);
-        flag.redirIn = 1;	//set redir flag
+        args[i] = token;   //add to arg array
+        strcpy(flag->input, args[i]);
+        printf("flag->input: %s\n", flag->input);
+        fflush(stdout);
+        flag->redirIn = 1;	//set redir flag
       }
       //redirect output
       else if(strncmp(args[i], ">", 1) == 0)
-      {
-
-        printf("output redirect from: %s\n", flag.output);
-        flag.redirOut = 1;  
+      {       
+        //get next arg, save as output file
+        token = strtok(NULL, " ");
+        token[strcspn(token, "\n")] = '\0';
+        args[i] = token;   //add to arg array
+        strcpy(flag->output, args[i]);
+        printf("flag->output: %s\n", flag->output);
+        fflush(stdout);
+        flag->redirOut = 1;  
       }
  
       printf("args[%d]: %s\n", i, args[i]);
-      token = strtok(NULL, " ");
       fflush(stdout);
+
+      token = strtok(NULL, " ");
       i++;
     }while(token != NULL);
      
@@ -189,11 +204,11 @@ int CommandLine(char *inputStr, char **args, char *expanded, struct flags flag, 
     //to array. decrement i.
     i--;     
 
-    //run in background
+    //set flag to run proc in background, take & off arg list
     if(strcmp(args[i], "&") == 0)
     {
-      flag.bckgrnd = 1;
-      printf("backround process\n");
+      args[i] = '\0';
+      flag->bckgrnd = 1;
     }
 
     //free alloc mem
@@ -246,6 +261,90 @@ char* SubPID(char *addPID, int pid){
 
    return addPID;   
 }
+
+/**************************************************************************
+ *Function:
+ *Description: 
+ *************************************************************************/
+void execCommand(char** args, struct flags *flag){
+    pid_t spawnPID = -7;
+    int input = 0,
+	output = 0,
+        childExit = 0;
+    char temp[100];
+  
+    spawnPID = fork();
+    switch(spawnPID) {
+      case -1:
+         fprintf(stderr, "Big ol' nope!\n");
+         exit(1);
+         break;
+      case 0:
+         printf("child process\n");
+         if(flag->redirIn == 1)
+         {
+           printf("input redir\n");
+           fflush(stdout);
+           //open file for input redir
+           input = open(flag->input, O_RDONLY);
+           if(input == -1)
+           {
+             fprintf(stderr, "cannot open %s for input\n", flag->input);
+             exit(1);
+           }
+           
+           //redirect
+           if(dup2(input, STDIN_FILENO) == -1)
+           {
+             fprintf(stderr, "cannot open %s for input\n", flag->input);
+             exit(1);            
+           }
+           
+           //close file after execution
+           fcntl(input, F_SETFD, FD_CLOEXEC);
+         }
+
+         if(flag->redirOut = 1)
+         {
+           printf("output redir\n");
+           fflush(stdout);
+           //open file for input redir
+           output = open(flag->output, O_WRONLY | O_CREAT | O_TRUNC, 0666);
+           if(output == -1)
+           {
+             fprintf(stderr, "cannot open %s for output\n", flag->output);
+             exit(1);
+           }
+           
+           //redirect
+           if(dup2(output, STDOUT_FILENO) == -1)
+           {
+             fprintf(stderr, "cannot open %s for output\n", flag->output);
+             exit(1);            
+           }
+           
+           //close file after execution
+           fcntl(output, F_SETFD, FD_CLOEXEC);
+         }
+         break;
+      default:
+         //execute in background
+         if(flag->bckgrnd == 1 && flag->allowBckgrnd == 1)
+         {
+           sprintf(temp, "background pid is %d\n", spawnPID);
+           write(1, temp, strlen(temp));
+           fflush(stdout);
+           flag->bgPIDs[flag->numPIDs] = spawnPID;
+           flag->numPIDs++;
+           waitpid(spawnPID, &childExit, WNOHANG);
+        }
+         else
+           waitpid(spawnPID, &childExit, 0);
+         break;
+    }
+}
+
+
 
 
 
