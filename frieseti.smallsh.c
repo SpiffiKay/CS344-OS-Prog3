@@ -24,7 +24,7 @@ struct flags{
     char *output;   //output filename
     int redirIn;    //flag input redirect
     int redirOut;   //flag output redirect
-    pid_t *bgPIDs;  //track background PIDs
+    pid_t bgPIDs[128];  //track background PIDs
     int numPIDs;    //number of background pids
     int bckgrnd;    //flag if command to run in background
     int allowBckgrnd; //flag if background processes are allowed
@@ -35,7 +35,7 @@ struct flags{
 int CommandLine(char*, char**, char*, struct flags*, int);
 void ChangeDir(char**);
 int KillProcesses(pid_t[], int);
-void fgExitStatus(int);
+void ExitStatus(int);
 char *SubPID(char*, int);
 void execCommand(char**, struct flags*);
 
@@ -59,21 +59,21 @@ int main(){
     struct flags *flag = malloc(sizeof(struct flags));
     flag->input = calloc(50, sizeof(char));
     flag->output = calloc(50, sizeof(char));
-    flag->bgPIDs = calloc(128, sizeof(pid_t));
+    memset(flag->bgPIDs, '\0', 128);
     flag->allowBckgrnd = 1;    
     flag->numPIDs = 0;
 
     //ignore ^C
     struct sigaction fg_ign = {0};
     fg_ign.sa_handler = SIG_IGN;
-    sigfillset(&sa_sigint.sa_mask);
+   // sigfillset(&sa_sigint.sa_mask);
     fg_ign.sa_flags = 0;
     sigaction(SIGINT, &fg_ign, NULL);
 
     //catch ^Z to switch bckgrnd mode
     struct sigaction bg_swtch = {0};
 //    bg_swtch.sa_handler = 
-    sigfullset(&sa_sigstp.sa_mask);
+   // sigfullset(&sa_sigstp.sa_mask);
     bg_swtch.sa_flags = 0;
 //    sigaction();
 
@@ -109,7 +109,7 @@ int main(){
           fflush(stdout);
         }
         else
-          fgExitStatus(status);
+          ExitStatus(status);
       }
       //built in entered: cd
       else if(strcmp(args[0], "cd") == 0)
@@ -117,6 +117,13 @@ int main(){
       //all other commands
       else
       {
+        
+        //check if background args are allowed
+        //if()
+        //{
+            //if background not allowed, override background command
+            //flag->bckgrnd = 0;
+        //}
         execCommand(args, flag);
         printf("all other input\n");
 
@@ -192,8 +199,16 @@ int CommandLine(char *inputStr, char **args, char *expanded, struct flags *flag,
         //get next arg, save as input file
         token = strtok(NULL, " ");
         token[strcspn(token, "\n")] = '\0';
-        args[i] = token;   //add to arg array
-        strcpy(flag->input, args[i]);
+       
+        //expand var with $$ with pid
+        if(strstr(token, "$$") != 0)
+        {  
+          sprintf(expanded, token);
+          args[i] = SubPID(expanded, shPID); 
+        }
+        else
+          args[i] = token;   //add to arg array
+        strcpy(flag->input, args[i]);   //save input file name
         printf("flag->input: %s\n", flag->input);
         fflush(stdout);
         flag->redirIn = 1;	//set redir flag
@@ -204,8 +219,15 @@ int CommandLine(char *inputStr, char **args, char *expanded, struct flags *flag,
         //get next arg, save as output file
         token = strtok(NULL, " ");
         token[strcspn(token, "\n")] = '\0';
-        args[i] = token;   //add to arg array
-        strcpy(flag->output, args[i]);
+        //expand var with $$ with pid
+        if(strstr(token, "$$") != 0)
+        {  
+          sprintf(expanded, token);
+          args[i] = SubPID(expanded, shPID); 
+        }
+        else
+	  args[i] = token;   //add to arg array
+        strcpy(flag->output, args[i]);   //save output file name
         printf("flag->output: %s\n", flag->output);
         fflush(stdout);
         flag->redirOut = 1;  
@@ -316,12 +338,15 @@ void execCommand(char** args, struct flags *flag){
          exit(1);
          break;
       case 0:
-
-         printf("child process\n");
+         write(1,"child process\n", 14);
+         fflush(stdout);
+        
+         //redirect input
          if(flag->redirIn == 1)
          {
-           printf("input redir\n");
+           write(1,"input redir\n", 12);
            fflush(stdout);
+
            //open file for input redir
            input = open(flag->input, O_RDONLY);
            if(input == -1)
@@ -329,22 +354,43 @@ void execCommand(char** args, struct flags *flag){
              fprintf(stderr, "cannot open %s for input\n", flag->input);
              exit(1);
            }
-           
+
            //redirect
            if(dup2(input, STDIN_FILENO) == -1)
            {
              fprintf(stderr, "cannot open %s for input\n", flag->input);
              exit(1);            
            }
-           
+
            //close file after execution
            fcntl(input, F_SETFD, FD_CLOEXEC);
          }
-
-         if(flag->redirOut = 1)
+         //redirect background prog input if not specified
+         else if(flag->bckgrnd == 1)
          {
-           printf("output redir\n");
+           write(1, "background input\n", 17);
            fflush(stdout);
+
+           input = open("/dev/null", O_RDONLY);
+           if(input == -1)
+           {
+             fprintf(stderr, "cannot open /dev/null for input\n");
+             exit(1);
+           } 
+          
+           if(dup2(input, 0) == -1)
+           {
+             fprintf(stderr, "cannot open /dev/null for input\n");
+             exit(1);
+           }
+         }
+         
+         //redirect output
+         if(flag->redirOut == 1)
+         {
+           write(1,"output redir\n", 13);
+           fflush(stdout);
+
            //open file for input redir
            output = open(flag->output, O_WRONLY | O_CREAT | O_TRUNC, 0666);
            if(output == -1)
@@ -359,14 +405,67 @@ void execCommand(char** args, struct flags *flag){
              fprintf(stderr, "cannot open %s for output\n", flag->output);
              exit(1);            
            }
-           
+
            //close file after execution
            fcntl(output, F_SETFD, FD_CLOEXEC);
          }
+         //redirect background prog input if not specified
+         else if(flag->bckgrnd == 1)
+         {
+           write(1,"in background output\n", 21);
+           fflush(stdout);
+            
+           output = open("/dev/null", O_WRONLY | O_TRUNC);
+           if(output == -1)
+           {
+             fprintf(stderr, "cannot open /dev/null for input\n");
+             exit(1);
+           } 
+          
+           if(dup2(output, 0) == -1)
+           {
+             fprintf(stderr, "cannot open /dev/null for input\n");
+             exit(1);
+           }
+         }        
+         //execute command
+         if(execvp(args[0], args))
+         {
+           fprintf(stderr, "%s, no such file or directory\n", args[0]);
+           fflush(stdout);
+           exit(1);
+         }
+
          break;
       default:
+         //check background processs (don't wait for termination)
+         if(flag->bckgrnd == 1)
+         {
+           spawnPID = waitpid(spawnPID, &childExit, WNOHANG);
+           write(1, "background pid is %d\n", spawnPID);
+           fflush(stdout);
+
+           //add current background pid to tracking array          
+           flag->bgPIDs[flag->numPIDs] = spawnPID;
+           flag->numPIDs++;
+         }
+         //check foreground process, but wait for execution to end before moving foward
+         else
+           spawnPID = waitpid(spawnPID, &childExit, 0);
          break;
-    }
+   }
+
+   //check for bckground processes that have finished
+   while((spawnPID = waitpid(-1, &childExit, WNOHANG)) != 0)
+   {
+     //print process pid
+     sprintf(temp, "background pid %d is done: ", spawnPID);
+     write(1, temp, strlen(temp));
+     fflush(stdout);
+
+     //print exit status
+     ExitStatus(childExit);
+   }
 }
 
 
@@ -398,7 +497,7 @@ int KillProcesses(pid_t proc[], int pCount){
  *Function: fgStatus()
  *Description: 
  *************************************************************************/
-void fgExitStatus(int status){
+void ExitStatus(int status){
     char exitStatus[100];
     memset(exitStatus, '\0', 100);    
 
