@@ -39,6 +39,10 @@ void fgExitStatus(int);
 char *SubPID(char*, int);
 void execCommand(char**, struct flags*);
 
+
+
+
+
 int main(){
     int runShell = 1,
         pCount = 0,
@@ -50,6 +54,7 @@ int main(){
     memset(input, '\0', MAX_CHARS);
     memset(args, '\0', MAX_ARGS);
     pid_t proc[128];
+   
     //instantiate flag struct
     struct flags *flag = malloc(sizeof(struct flags));
     flag->input = calloc(50, sizeof(char));
@@ -58,6 +63,19 @@ int main(){
     flag->allowBckgrnd = 1;    
     flag->numPIDs = 0;
 
+    //ignore ^C
+    struct sigaction fg_ign = {0};
+    fg_ign.sa_handler = SIG_IGN;
+    sigfillset(&sa_sigint.sa_mask);
+    fg_ign.sa_flags = 0;
+    sigaction(SIGINT, &fg_ign, NULL);
+
+    //catch ^Z to switch bckgrnd mode
+    struct sigaction bg_swtch = {0};
+//    bg_swtch.sa_handler = 
+    sigfullset(&sa_sigstp.sa_mask);
+    bg_swtch.sa_flags = 0;
+//    sigaction();
 
     //while shell is running
     do{
@@ -244,20 +262,38 @@ void ChangeDir(char **args){
 }
 
 /**************************************************************************
- *Function: SubPID()
- *Description: 
+ *Function: SubPID()							  *
+ *Description: Takes a pointer to a string that is an arg that needs 	  *
+ *expanded to include the shell's pid, as well as an int holding the shell*
+ *pid. It then dissects the arg, and places the pid wherever the 	  *
+ *placeholder ($$) is. It then returns a pointer to the new arg with pid. *
  *************************************************************************/
 char* SubPID(char *addPID, int pid){
-   char withPID[7];
-   memset(withPID, '\0', 7);
+   int frLen = 0;
+   char newArg[50],
+        wPID[7];
+   char *ptr = NULL;
+   memset(wPID, '\0', 7);
+   memset(newArg, '\0', 50);
 
-   //cut off the $$ at end or if alone as reqd.
-   addPID[strcspn(addPID, "$")+1] = '\0';
-   addPID[strcspn(addPID, "$")] = '\0';
+   //isolate $$ and separate the parts of the string around it
+   ptr = strstr(addPID, "$$");
+   frLen = strlen(addPID) - strlen(ptr); //length of string before $$
 
-   //replace with subshell pid
-   sprintf(withPID, "%d", pid);
-   strcat(addPID, withPID);
+   //replace $$ with subshell pid
+   strncpy(newArg, addPID, frLen); //front of string
+   sprintf(wPID, "%d", pid); 
+   strcat(newArg, wPID);  //pid
+
+   //if there is string after $$, add to arg
+   if(strlen(ptr)> 2)
+   {
+     ptr += 2;  //cut off $$
+     strcat(newArg, ptr);
+   }
+
+   //set new arg
+   sprintf(addPID, newArg);
 
    return addPID;   
 }
@@ -276,10 +312,11 @@ void execCommand(char** args, struct flags *flag){
     spawnPID = fork();
     switch(spawnPID) {
       case -1:
-         fprintf(stderr, "Big ol' nope!\n");
+         fprintf(stderr, "Apparently you can't be trusted with forks.\n");
          exit(1);
          break;
       case 0:
+
          printf("child process\n");
          if(flag->redirIn == 1)
          {
@@ -328,18 +365,6 @@ void execCommand(char** args, struct flags *flag){
          }
          break;
       default:
-         //execute in background
-         if(flag->bckgrnd == 1 && flag->allowBckgrnd == 1)
-         {
-           sprintf(temp, "background pid is %d\n", spawnPID);
-           write(1, temp, strlen(temp));
-           fflush(stdout);
-           flag->bgPIDs[flag->numPIDs] = spawnPID;
-           flag->numPIDs++;
-           waitpid(spawnPID, &childExit, WNOHANG);
-        }
-         else
-           waitpid(spawnPID, &childExit, 0);
          break;
     }
 }
