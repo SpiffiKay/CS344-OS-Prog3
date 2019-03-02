@@ -18,30 +18,28 @@
 #define MAX_ARGS 512 	  
 #define MAX_CHARS 2048 
 
+//begrudgingly global variable
+int allowbg = 1;   //set to allow background processes at beginning of program
+
 //struct for flags and handling input/output redirect
 struct flags{
-    char *input;    //input filename
-    char *output;   //output filename
+    char input[50];    //input filename
+    char output[50];   //output filename
     int redirIn;    //flag input redirect
     int redirOut;   //flag output redirect
     pid_t bgPIDs[128];  //track background PIDs
     int numPIDs;    //number of background pids
     int bckgrnd;    //flag if command to run in background
-    int allowBckgrnd; //flag if background processes are allowed
 };
 
-
 //prototypes
-int CommandLine(char*, char**, char*, struct flags*, int);
+void CommandLine(char*, char**, char*, struct flags*, int);
 void ChangeDir(char**);
 int KillProcesses(struct flags*);
 void ExitStatus(int);
 char *SubPID(char*, int);
-int ExecCommand(char**, struct flags*);
-
-
-
-
+int ExecCommand(char**, struct flags*, struct sigaction, struct sigaction);
+void AllowBG(int);
 
 int main(){
     int runShell = 1,
@@ -57,25 +55,28 @@ int main(){
    
     //instantiate flag struct
     struct flags *flag = malloc(sizeof(struct flags));
-    flag->input = calloc(50, sizeof(char));
-    flag->output = calloc(50, sizeof(char));
-    memset(flag->bgPIDs, '\0', 128);
-    flag->allowBckgrnd = 1;    
+    memset(flag->bgPIDs, '\0', 128); 
     flag->numPIDs = 0;
 
-    //ignore ^C
-    struct sigaction fg_ign = {0};
-    fg_ign.sa_handler = SIG_IGN;
-   // sigfillset(&sa_sigint.sa_mask);
-    fg_ign.sa_flags = 0;
-    sigaction(SIGINT, &fg_ign, NULL);
+    //allow default for ^C in foreground child process
+    struct sigaction sig_def = {0};
+    sig_def.sa_handler = SIG_DFL;
+    sigfillset(&sig_def.sa_mask);
+    sig_def.sa_flags = SA_RESTART;
 
     //catch ^Z to switch bckgrnd mode
     struct sigaction bg_swtch = {0};
-//    bg_swtch.sa_handler = 
-   // sigfullset(&sa_sigstp.sa_mask);
-    bg_swtch.sa_flags = 0;
-//    sigaction();
+    bg_swtch.sa_handler = AllowBG;
+    sigfillset(&bg_swtch.sa_mask);
+    bg_swtch.sa_flags = SA_RESTART;
+    sigaction(SIGTSTP, &bg_swtch, NULL);
+
+    //ignore signals (use both for ^C and ^Z in child processes)
+    struct sigaction ignore_act = {0};
+    ignore_act.sa_handler = SIG_IGN;
+
+    //ignore ^C (will last into exec)
+    sigaction(SIGINT, &ignore_act, NULL);    
 
     //while shell is running
     do{
@@ -85,7 +86,6 @@ int main(){
       flag->redirIn = 0;
       flag->redirOut = 0;
       flag->bckgrnd = 0;
-
 
       //run command line
       CommandLine(input, args, expanded, flag, shPID);
@@ -98,7 +98,7 @@ int main(){
         continue;    
       //built-in entered: exit
       else if(strcmp(args[0], "exit") == 0)
-        //clean up any zombie or running background processes
+        //clean up any zombie and/or running background processes
         runShell = KillProcesses(flag);
       //built-in entered: status
       else if(strcmp(args[0], "status") == 0)
@@ -120,14 +120,10 @@ int main(){
       {
         
         //check if background args are allowed
-        //if()
-        //{
+        if(allowbg == 0)
             //if background not allowed, override background command
-            //flag->bckgrnd = 0;
-        //}
-        status = ExecCommand(args, flag);
-        // printf("all other input\n");
-
+            flag->bckgrnd = 0;
+        status = ExecCommand(args, flag, ignore_act, sig_def);
       }
    
     }while(runShell == 1);
@@ -136,23 +132,24 @@ int main(){
     free(input);
     free(args);
     free(expanded);  
-    free(flag->input);
-    free(flag->output);
     free(flag);
 
     return 0;
 }
 
 /**************************************************************************
- *Function:
- *Description: 
- *************************************************************************/
-
-/**************************************************************************
  *Function: CommandLine()
- *Description: Prints ": " as the command line, then 
+ *Description: Takes a char array to hold input, an array of char pointers
+ * for parsed input, a char pointer for expandaed args, the flag struct 
+ * and the shell PID as args.  Prints ": " as the command line, then takes
+ * user input. The user input is then tokenized, and parsed. If an arg
+ * needs to be expanded to include the shell pid, then it is and saved.
+ * If there is "<" or ">" indicated for redirection, steps are taken to 
+ * set up the environment to facilitate the indicated redirection. 
+ * Finally, if "&" is passed to indicate that it is to be a background 
+ * process a flag is set to indicate this.
  *************************************************************************/
-int CommandLine(char *inputStr, char **args, char *expanded, struct flags *flag, int shPID){
+void CommandLine(char *inputStr, char **args, char *expanded, struct flags *flag, int shPID){
     char *token = NULL;
     char cLine[] = ": ";
     char *input = NULL;  
@@ -210,8 +207,6 @@ int CommandLine(char *inputStr, char **args, char *expanded, struct flags *flag,
           args[i] = token;   //add to arg array
         
         strcpy(flag->input, args[i]);   //save input file name
-        //printf("flag->input: %s\n", flag->input);
-        //fflush(stdout);
         flag->redirIn = 1;	//set redir flag
       }
       //redirect output
@@ -220,6 +215,7 @@ int CommandLine(char *inputStr, char **args, char *expanded, struct flags *flag,
         //get next arg, save as output file
         token = strtok(NULL, " ");
         token[strcspn(token, "\n")] = '\0';
+
         //expand var with $$ with pid
         if(strstr(token, "$$") != 0)
         {  
@@ -230,13 +226,8 @@ int CommandLine(char *inputStr, char **args, char *expanded, struct flags *flag,
 	  args[i] = token;   //add to arg array
         
         strcpy(flag->output, args[i]);   //save output file name
-        //printf("flag->output: %s\n", flag->output);
-        //fflush(stdout);
         flag->redirOut = 1;  
       }
- 
-      //printf("args[%d]: %s\n", i, args[i]);
-      //fflush(stdout);
 
       token = strtok(NULL, " ");
       i++;
@@ -252,7 +243,6 @@ int CommandLine(char *inputStr, char **args, char *expanded, struct flags *flag,
       args[i] = '\0';
       flag->bckgrnd = 1;
     }
-
     //free alloc mem
     free(input);
 }
@@ -323,29 +313,49 @@ char* SubPID(char *addPID, int pid){
 }
 
 /**************************************************************************
- *Function:
- *Description: 
+ *Function: ExecCommand()
+ *Description: takes an array of char pointers, that point to the args
+ *given by the user, the flags strcut, and both the signal structs: one
+ *to ignore ^Z and one to tell the foreground child process to do the
+ *default for ^C.
+ *
+ * This program forks child processes, determines where input/output 
+ * should be directed from, and whether a program is a background process.
+ * It executes these processes. The parent process determines if it is a
+ * parent or child process, and if it is a background process it prints
+ * the pid and immediately moves the program along, if it is a foreground 
+ * program it waits til the end the child proc execution, then moves 
+ * forward. If the forground process is terminated by a signal, it prints
+ * what signal it is terminated by.
+ *
+ * Either way it checks the background processes so see if any have
+ * terminated, and prints the pids of those who have.
  *************************************************************************/
-int ExecCommand(char** args, struct flags *flag){
+int ExecCommand(char** args, struct flags *flag, struct sigaction ignore_act, struct sigaction sig_def){
     pid_t spawnPID = -7;
     int input = 0,
 	output = 0,
         childExit = 0,
         fgChild = 0,
-        i = 0,
-        j = 0;
-    char temp[100];
-  
-    spawnPID = fork();
+        bglen = 0,
+        bgexlen = 0,
+        exlen = 0,
+        i = 0;
+    char bg[40],
+         bgex[60],
+         exitStatus[60];
+    memset(bg, '\0', 40);
+    memset(bgex, '\0', 60);
+    memset(exitStatus, '\0', 60);
 
+    //create child processes
+    if((spawnPID = fork()) == 0)
+      i++;
     //stop fork bombs
-    if(spawnPID == 0)
-       i++;
     if(i >= 50)
     {
-      write(1, "forks are running wild!\n", 24);
-      fflush(stdout);
-      exit(1);
+      fprintf(stderr, "the forks are running wild!\n");
+      exit(2);
     }
    
     switch(spawnPID) {
@@ -355,16 +365,17 @@ int ExecCommand(char** args, struct flags *flag){
          exit(1);
          break;
       //child process
-      case 0:
-         //write(1,"child process\n", 14);
-         //fflush(stdout);
-        
+      case 0:       
+         //child processes ignore ^Z
+         sigaction(SIGTSTP, &ignore_act, NULL);
+
+         //if child is foreground process, do default ^C action
+         if(flag->bckgrnd == 0)
+           sigaction(SIGINT, &sig_def, NULL);         
+       
          //redirect input
          if(flag->redirIn == 1)
          {
-           //write(1,"input redir\n", 12);
-           //fflush(stdout);
-
            //open file for input redir
            input = open(flag->input, O_RDONLY);
            if(input == -1)
@@ -379,16 +390,10 @@ int ExecCommand(char** args, struct flags *flag){
              fprintf(stderr, "cannot open %s for input\n", flag->input);
              exit(1);            
            }
-
-           //close file after execution
-           fcntl(input, F_SETFD, FD_CLOEXEC);
          }
          //redirect background prog input if not specified
          else if(flag->bckgrnd == 1)
          {
-           //write(1, "background input\n", 17);
-           //fflush(stdout);
-
            input = open("/dev/null", O_RDONLY);
            if(input == -1)
            {
@@ -406,9 +411,6 @@ int ExecCommand(char** args, struct flags *flag){
          //redirect output
          if(flag->redirOut == 1)
          {
-           //write(1,"output redir\n", 13);
-           //fflush(stdout);
-
            //open file for input redir
            output = open(flag->output, O_WRONLY | O_CREAT | O_TRUNC, 0666);
            if(output == -1)
@@ -423,16 +425,10 @@ int ExecCommand(char** args, struct flags *flag){
              fprintf(stderr, "cannot open %s for output\n", flag->output);
              exit(1);            
            }
-
-           //close file after execution
-           fcntl(output, F_SETFD, FD_CLOEXEC);
          }
          //redirect background prog input if not specified
          else if(flag->bckgrnd == 1)
-         {
-          // write(1,"in background output\n", 21);
-          // fflush(stdout);
-            
+         {  
            output = open("/dev/null", O_WRONLY | O_TRUNC);
            if(output == -1)
            {
@@ -445,7 +441,8 @@ int ExecCommand(char** args, struct flags *flag){
              fprintf(stderr, "cannot open /dev/null for input\n");
              exit(1);
            }
-         }        
+         }  
+      
          //execute command
          if(execvp(args[0], args))
          {
@@ -454,23 +451,34 @@ int ExecCommand(char** args, struct flags *flag){
            exit(1);
          }
          break;
-      default:
+      default: 
          //check background processes (don't wait for termination)
          if(flag->bckgrnd == 1)
          {
-           spawnPID = waitpid(spawnPID, &childExit, WNOHANG);
-           write(1, "background pid is %d\n", spawnPID);
+           waitpid(spawnPID, &childExit, WNOHANG);
+           //print pid to screen
+           sprintf(bg, "background pid is %d\n", spawnPID);
+           bglen = strlen(bg);
+           write(1, bg, bglen);
            fflush(stdout);
 
            //add current background pid to tracking array          
            flag->bgPIDs[flag->numPIDs] = spawnPID;
            flag->numPIDs++;
          }
-         //check foreground process, but wait for execution to end before moving foward
+         //check foreground process, but wait for execution to end before moving forward
          else
          {
            spawnPID = waitpid(spawnPID, &childExit, 0);
-       
+           //if child terminated by signal (^C) print term signal)
+           if(WIFSIGNALED(childExit)) 
+           {
+             sprintf(exitStatus, "terminated by signal %d\n", WTERMSIG(childExit));
+             exlen = strlen(exitStatus);
+             write(1, exitStatus, exlen); 
+             fflush(stdout);           
+           }
+
            //save exit status of foreground process
            fgChild = childExit;  
          }
@@ -478,30 +486,20 @@ int ExecCommand(char** args, struct flags *flag){
        while((spawnPID = waitpid(-1, &childExit, WNOHANG)) > 0)
        {
          //print process pid
-         sprintf(temp, "background pid %d is done: ", spawnPID);
-         write(1, temp, strlen(temp));
+         sprintf(bgex, "background pid %d is done: ", spawnPID);
+         bgexlen = strlen(bgex);
+         write(1, bgex, bgexlen);
          fflush(stdout);
 
          //print exit status
          ExitStatus(childExit);
-
-         j++;
-     
-         if(j >= 30)
-         {
-           write(1, "stuck in checking bg processes\n", 32);
-           fflush(stdout);
-           exit(1);
-         }
        }
         break;
     }
-   
+
+    //return most recent foreground exit status
     return fgChild;
 }
-
-
-
 
 /**************************************************************************
  *Function: KillProcesses()                                               *
@@ -518,31 +516,65 @@ int KillProcesses(struct flags *flag){
     for(i; i < flag->numPIDs; i++)
     {
       kill(flag->bgPIDs[flag->numPIDs], SIGTERM);
-    }  
-  
-    printf("kill program\n");
+    } 
+
+    //returned 0 signals to end loop that runs the program
     return 0;
 }
 
 /**************************************************************************
- *Function: fgStatus()
- *Description: 
+ *Function: ExitStatus()
+ *Description: Checks if a process has been terminated by exiting 
+ * normally or by terminating by signal, then prints how it was terminated.
  *************************************************************************/
 void ExitStatus(int status){
-    char exitStatus[100];
-    memset(exitStatus, '\0', 100);    
+    int exlen = 0;
+    char exitStatus[50];
+    memset(exitStatus, '\0', 50);    
 
     //exited by status
     if(WIFEXITED(status))
     {
       sprintf(exitStatus,"exit status %d\n", WEXITSTATUS(status));
-      write(1, exitStatus, strlen(exitStatus));
+      exlen = strlen(exitStatus);
+      write(1, exitStatus, exlen);
+      fflush(stdout);
     }  
     //terminated by signal 
     else
     {
       sprintf(exitStatus, "terminated by signal %d\n", WTERMSIG(status));
-      write(1, exitStatus, strlen(exitStatus));
+      exlen = strlen(exitStatus);
+      write(1, exitStatus, exlen);
+      fflush(stdout);
     }
 }
 
+/**************************************************************************
+ *Function: AllowBG()
+ *Description: When user hits ^Z, the signal is caught, and activates 
+ *this function. If background processes are allowed, it turns them off
+ * and prints to screen alerting the user. If they are not allowed, it 
+ * turns them on and prints an alert to screen. 
+ *************************************************************************/
+void AllowBG(int signo){
+
+   //if background processes are allowed
+   if(allowbg == 1)
+   {
+     write(1, "entering foreground-only mode (& is now ignored)\n", 49);
+     fflush(stdout);
+
+     //don't allow background processes
+     allowbg = 0;
+   }
+   //if background processes are not allowed
+   else 
+   {
+     write(1, "exiting foreground-only mode\n", 29);
+     fflush(stdout); 
+     //allow background processes
+     allowbg = 1;
+   }
+
+}
